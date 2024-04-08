@@ -17,6 +17,8 @@ pub struct DaoState {
     root_node: String,
     members: HashMap<String, AlloyAddress>,
     proposals: HashMap<u64, ProposalInProgress>,
+    // client_blacklist: Vec<String>,
+    // member_blacklist: Vec<String>,
     queue_response_timeout_seconds: u8,
     max_outstanding_payments: u8,
     payment_period_hours: u8,
@@ -29,6 +31,7 @@ pub struct DaoState {
 pub enum DaoTransaction {
     Propose(Proposal),
     Vote { item: u64, vote: SignedVote },
+    // Join: TODO
     // Payment: TODO
     // * from clients to treasury for work done
     // * to providers from treasury for work done
