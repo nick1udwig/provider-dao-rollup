@@ -3,63 +3,98 @@ use alloy_primitives::{Address as AlloyAddress, U256};
 use chess::{Board, BoardStatus, ChessMove};
 use kinode_process_lib::{get_blob, get_typed_state, http, set_state};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
-type GameId = U256;
+const DEFAULT_QUEUE_RESPONSE_TIMEOUT_SECONDS: u8 = 5;
+const DEFAULT_MAX_OUTSTANDING_PAYMENTS: u8 = 3;
+const DEFAULT_PAYMENT_PERIOD_HOURS: u8 = 24;
 
-/// A game of chess
+/// Current on-chain state of DAO
 #[derive(Serialize, Deserialize)]
-pub struct Game {
-    turns: u64,
-    board: String,
-    white: AlloyAddress,
-    black: AlloyAddress,
-    wager: U256,
-    status: String, // TODO should be an enum: "<Address> won", "stalemate", "active"
+pub struct DaoState {
+    root_node: String,
+    members: HashMap<String, AlloyAddress>,
+    proposals: HashMap<u64, ProposalInProgress>,
+    queue_response_timeout_seconds: u8,
+    max_outstanding_payments: u8,
+    payment_period_hours: u8,
 }
 
-/// A game of chess that has been proposed by white, but not accepted by black yet
-#[derive(Serialize, Deserialize)]
-pub struct PendingGame {
-    white: AlloyAddress,
-    black: AlloyAddress,
-    accepted: (bool, bool),
-    wager: U256,
-}
-
-/// While BaseRollupState contains all the of the state that any chain will need to get started,
-/// like balances, withdrawals, etc. ChessState contains all of the state that is specific to the
-/// chess rollup
-#[derive(Serialize, Deserialize)]
-pub struct ChessState {
-    pub next_game_id: GameId,
-    pub pending_games: HashMap<GameId, PendingGame>,
-    pub games: HashMap<GameId, Game>,
-}
-
-/// All of the transactions that will go in the TransactionData::Extension variant
-/// that we need for different actions in chess
+/// Possible changes to on-chain DAO state:
+/// * Proposing changes to state
+/// * Voting on changes to state
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum ChessTransactions {
-    ProposeGame {
-        white: AlloyAddress,
-        black: AlloyAddress,
-        wager: U256,
-    },
-    StartGame(GameId),
-    Move {
-        game_id: GameId,
-        san: String,
-    },
-    Resign(GameId),
+pub enum DaoTransaction {
+    Propose(Proposal),
+    Vote { item: u64, vote: SignedVote },
+    // Payment: TODO
+    // * from clients to treasury for work done
+    // * to providers from treasury for work done
+    //   * should payout to providers be subject to vote?
+    //   * ideally it should be provable and then Just Work
 }
 
-/// ChessState and ChessTransactions help to extend the "basic" rollup state
-/// This is the core thing that you need to extend to modify this rollup: either
-/// changing the ChessState, or changing the ChessTransactions, and making sure that
-/// they are pluggable with BaseRollupState.
-pub type FullRollupState = BaseRollupState<ChessState, ChessTransactions>;
+/// Possible proposals
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Proposal {
+    ChangeRootNode(String),
+    ChangeQueueResponseTimeoutSeconds(u8),
+    ChangeMaxOutstandingPayments(u8),
+    ChangePaymentPeriodHours(u8),
+    Kick(String),
+}
+
+/// Possible proposals
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ProposalInProgress {
+    proposal: Proposal,
+    votes: HashMap<String, SignedVote>,
+}
+
+/// A vote on a proposal
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Vote {
+    proposal_hash: u64,
+    is_yea: bool,
+}
+
+/// A signed vote on a proposal
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct SignedVote {
+    vote: Vote,
+    signature: u64,
+}
+
+pub type FullRollupState = BaseRollupState<DaoState, DaoTransaction>;
+
+impl Hash for Proposal {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            ChangeRootNode(node) => {
+                0.hash(state);
+                node.hash(state);
+            }
+            ChangeQueueResponseTimeoutSeconds(timeout) => {
+                1.hash(state);
+                timeout.hash(state);
+            }
+            ChangeMaxOutstandingPayments(max) => {
+                2.hash(state);
+                max.hash(state);
+            }
+            ChangePaymentPeriodHours(period) => {
+                3.hash(state);
+                period.hash(state);
+            }
+            Kick(node) => {
+                4.hash(state);
+                node.hash(state);
+            }
+        }
+    }
+}
 
 impl Default for FullRollupState {
     fn default() -> Self {
@@ -70,10 +105,13 @@ impl Default for FullRollupState {
             withdrawals: vec![],
             batches: vec![],
             l1_block: U256::ZERO,
-            state: ChessState {
-                next_game_id: U256::ZERO,
-                pending_games: HashMap::new(),
-                games: HashMap::new(),
+            state: DaoState {
+                root_node: String::new(),
+                members: HashMap::new(),
+                proposals: HashMap::new(),
+                queue_response_timeout_seconds: DEFAULT_QUEUE_RESPONSE_TIMEOUT_SECONDS,
+                max_outstanding_payments: DEFAULT_MAX_OUTSTANDING_PAYMENTS,
+                payment_period_hours: DEFAULT_PAYMENT_PERIOD_HOURS,
             },
         }
     }
@@ -81,9 +119,9 @@ impl Default for FullRollupState {
 
 /// This is where all of the business logic for the chess rollup lives.
 /// The `execute` function is called by the sequencer to process a single transaction.
-impl ExecutionEngine<ChessTransactions> for FullRollupState {
+impl ExecutionEngine<DaoTransaction> for FullRollupState {
     // process a single transaction
-    fn execute(&mut self, stx: SignedTransaction<ChessTransactions>) -> anyhow::Result<()> {
+    fn execute(&mut self, stx: SignedTransaction<DaoTransaction>) -> anyhow::Result<()> {
         let decode_stx = stx.clone();
 
         // DO NOT verify a signature for a bridge transaction
@@ -147,151 +185,34 @@ impl ExecutionEngine<ChessTransactions> for FullRollupState {
                 Ok(())
             }
             // TransactionData::Extension includes the business logic for the rollup
-            TransactionData::Extension(ext) => match ext {
-                ChessTransactions::ProposeGame {
-                    white,
-                    black,
-                    wager,
-                } => {
-                    let game_id = self.state.next_game_id;
-                    self.state.pending_games.insert(
-                        game_id,
-                        PendingGame {
-                            white: white.clone(),
-                            black: black.clone(),
-                            accepted: if white == stx.pub_key {
-                                (true, false)
-                            } else if black == stx.pub_key {
-                                (false, true)
-                            } else {
-                                return Err(anyhow::anyhow!("not a player"));
-                            },
-                            wager,
-                        },
-                    );
-                    self.state.next_game_id += U256::from(1);
-                    self.sequenced.push(stx);
-                    Ok(())
-                }
-                ChessTransactions::StartGame(game_id) => {
-                    let Some(pending_game) = self.state.pending_games.get(&game_id) else {
-                        return Err(anyhow::anyhow!("game id doesn't exist"));
-                    };
-                    if pending_game.accepted == (true, false) {
-                        if stx.pub_key != pending_game.black {
-                            return Err(anyhow::anyhow!("not white"));
+            TransactionData::Extension(ext) => {
+                match ext {
+                    DaoTransaction::Propose(proposal) => {
+                        let mut hasher = DefaultHasher::new();
+                        proposal.hash(&mut hasher);
+                        let hash = hasher.finish();
+                        if self.state.proposals.contains_key(&hash) {
+                            Err(anyhow::anyhow!("proposal already exists"))
                         }
-                    } else if pending_game.accepted == (false, true) {
-                        if stx.pub_key != pending_game.white {
-                            return Err(anyhow::anyhow!("not black"));
-                        }
-                    } else {
-                        return Err(anyhow::anyhow!("impossible to reach"));
+                        proposals.insert(hash, ProposalInProgress {
+                            proposal,
+                            votes: HashMap::new()
+                        });
                     }
-
-                    let Some(white_balance) = self.balances.get(&pending_game.white) else {
-                        return Err(anyhow::anyhow!("white doesn't exist"));
-                    };
-                    let Some(black_balance) = self.balances.get(&pending_game.black) else {
-                        return Err(anyhow::anyhow!("black doesn't exist"));
-                    };
-
-                    if white_balance < &pending_game.wager || black_balance < &pending_game.wager {
-                        return Err(anyhow::anyhow!("insufficient funds"));
+                    DaoTransaction::Vote { item, vote } => {
+                        unimplemented!("TODO: take the source node id and use that as votes map key");
+                        //if !self.state.proposals.contains_key(&item) {
+                        //    Err(anyhow::anyhow!("proposal does not exist"))
+                        //}
+                        //self.state.proposals.entry(&item)
+                        //    .and_modify(|votes| {
+                        //    });
                     }
-
-                    self.balances.insert(
-                        pending_game.white.clone(),
-                        self.balances.get(&pending_game.white).unwrap() - pending_game.wager,
-                    );
-                    self.balances.insert(
-                        pending_game.black.clone(),
-                        self.balances.get(&pending_game.black).unwrap() - pending_game.wager,
-                    );
-
-                    self.state.games.insert(
-                        game_id,
-                        Game {
-                            turns: 0,
-                            board: Board::default().to_string(),
-                            white: pending_game.white.clone(),
-                            black: pending_game.black.clone(),
-                            wager: pending_game.wager * U256::from(2),
-                            status: "ongoing".to_string(),
-                        },
-                    );
-                    self.state.pending_games.remove(&game_id);
-                    self.sequenced.push(stx);
-                    Ok(())
                 }
-                ChessTransactions::Move { game_id, san } => {
-                    let Some(game) = self.state.games.get_mut(&game_id) else {
-                        return Err(anyhow::anyhow!("game id doesn't exist"));
-                    };
 
-                    if game.turns % 2 == 0 && stx.pub_key != game.white {
-                        return Err(anyhow::anyhow!("not white's turn"));
-                    } else if game.turns % 2 == 1 && stx.pub_key != game.black {
-                        return Err(anyhow::anyhow!("not black's turn"));
-                    }
-
-                    let mut board = Board::from_str(&game.board).unwrap();
-                    let Ok(mov) = san.parse::<ChessMove>() else {
-                        return Err(anyhow::anyhow!("invalid san move"));
-                    };
-                    board = board.make_move_new(mov);
-                    game.board = board.to_string();
-                    game.turns += 1;
-
-                    if board.status() == BoardStatus::Checkmate {
-                        if game.turns % 2 == 0 {
-                            self.balances.insert(
-                                game.black.clone(),
-                                self.balances.get(&game.black).unwrap() + game.wager,
-                            );
-                        } else {
-                            self.balances.insert(
-                                game.white.clone(),
-                                self.balances.get(&game.white).unwrap() + game.wager,
-                            );
-                        }
-                        game.status = format!("{} won", stx.pub_key);
-                    } else if board.status() == BoardStatus::Stalemate {
-                        self.balances.insert(
-                            game.white.clone(),
-                            self.balances.get(&game.white).unwrap() + game.wager / U256::from(2),
-                        );
-                        self.balances.insert(
-                            game.black.clone(),
-                            self.balances.get(&game.black).unwrap() + game.wager / U256::from(2),
-                        );
-                        game.status = "stalemate".to_string();
-                    }
-
-                    self.sequenced.push(stx);
-                    Ok(())
-                }
-                ChessTransactions::Resign(game_id) => {
-                    let game = self
-                        .state
-                        .games
-                        .get_mut(&game_id)
-                        .expect("game id doesn't exist");
-                    if game.turns % 2 == 0 {
-                        self.balances.insert(
-                            game.black.clone(),
-                            self.balances.get(&game.black).unwrap() + game.wager,
-                        );
-                    } else {
-                        self.balances.insert(
-                            game.white.clone(),
-                            self.balances.get(&game.white).unwrap() + game.wager,
-                        );
-                    }
-                    game.status = format!("{} resigned", stx.pub_key);
-                    Ok(())
-                }
-            },
+                self.sequenced.push(stx);
+                Ok(())
+            }
         }
     }
 
@@ -314,6 +235,11 @@ impl ExecutionEngine<ChessTransactions> for FullRollupState {
             None => FullRollupState::default(),
         }
     }
+
+    // TODO:
+    //  in-Kinode messaging
+    //  * queries of state (e.g., for fetching root node)
+    //  * writes to state (e.g., for proposing/voting)
 
     // logic for handling incoming http requests
     fn rpc(&mut self, req: &http::IncomingHttpRequest) -> anyhow::Result<()> {
@@ -343,7 +269,7 @@ impl ExecutionEngine<ChessTransactions> for FullRollupState {
                 };
                 // deserialize the blob into a SignedTransaction
                 let tx =
-                    serde_json::from_slice::<SignedTransaction<ChessTransactions>>(&blob.bytes)?;
+                    serde_json::from_slice::<SignedTransaction<DaoTransaction>>(&blob.bytes)?;
 
                 // execute the transaction, which will propagate any errors like a bad signature or bad move
                 self.execute(tx)?;
