@@ -62,16 +62,22 @@ fn init(our: Address) {
 
     let package_name = our.package();
 
-    let request: ReadRequest = match serde_json::from_slice(body.as_slice()) {
+    let body = String::from_utf8(body)
+        .expect(&format!("usage:\n{SCRIPT_NAME}:{package_name}:{PUBLISHER} node read_request\ne.g.\n{SCRIPT_NAME}:{package_name}:{PUBLISHER} our \"Routers\""));
+    let (node, request) = body.split_once(" ")
+        .expect(&format!("usage:\n{SCRIPT_NAME}:{package_name}:{PUBLISHER} node read_request\ne.g.\n{SCRIPT_NAME}:{package_name}:{PUBLISHER} our \"Routers\""));
+    let node = if node != "our" { node } else { our.node() };
+
+    let request: ReadRequest = match serde_json::from_str(request) {
         Ok(rr) => rr,
         Err(_e) => {
-            println!("usage:\n{SCRIPT_NAME}:{package_name}:{PUBLISHER} read_request\ne.g.\n{SCRIPT_NAME}:{package_name}:{PUBLISHER} \"Routers\"");
+            println!("usage:\n{SCRIPT_NAME}:{package_name}:{PUBLISHER} node read_request\ne.g.\n{SCRIPT_NAME}:{package_name}:{PUBLISHER} our \"Routers\"");
             return;
         },
     };
 
     let Ok(Ok(response)) =
-        Request::to((our.node(), (PROCESS_NAME, package_name, PUBLISHER)))
+        Request::to((node, (PROCESS_NAME, package_name, PUBLISHER)))
             .body(vec![])
             .blob_bytes(serde_json::to_vec(&SequencerRequest::Read(request)).unwrap())
             .send_and_await_response(5)

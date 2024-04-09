@@ -13,7 +13,7 @@
     "read.wasm": {
         "root": false,
         "public": false,
-        "request_networking": false,
+        "request_networking": true,
         "request_capabilities": [
             "sequencer:provider-dao-rollup:nick1udwig.os"
         ],
