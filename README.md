@@ -13,8 +13,11 @@ This repo contains 4 main components:
 
 ## Developer Quick Start
 (assuming your kinode is running on port 8080)
+https://succinctlabs.github.io/sp1/getting-started/install.html
 ```bash
-cd ./sequencer
+cd elf_program
+cargo prove build
+cd ../sequencer
 kit bs
 # (optional) if you want to use the prover
 cd ../prover_extension
