@@ -1,6 +1,5 @@
 use alloy_primitives::{keccak256, Address as AlloyAddress, FixedBytes, Signature, U256};
 use alloy_sol_types::{sol, SolValue};
-use kinode_process_lib::http::IncomingHttpRequest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,7 +20,7 @@ sol! {
 /// - additional state S, which can be anything. In this repo, we use it for storing chess game state
 #[derive(Serialize, Deserialize)]
 pub struct BaseRollupState<S, T> {
-    pub sequenced: Vec<SignedTransaction<T>>,
+    pub sequenced: Vec<(SignedTransaction<T>, Option<String>)>,  // TODO: move to another struct? We will have to prove this
     pub balances: HashMap<AlloyAddress, U256>,
     pub nonces: HashMap<AlloyAddress, U256>,
     pub withdrawals: Vec<(AlloyAddress, U256)>,
@@ -80,10 +79,9 @@ pub enum TransactionData<T> {
 /// }
 /// ```
 pub trait ExecutionEngine<T> {
-    fn execute(&mut self, tx: SignedTransaction<T>) -> anyhow::Result<()>;
+    fn execute(&mut self, tx: SignedTransaction<T>, node: Option<String>) -> anyhow::Result<()>;
     fn save(&self) -> anyhow::Result<()>;
     fn load() -> Self;
-    fn rpc(&mut self, req: &IncomingHttpRequest) -> anyhow::Result<()>;
 }
 
 /// The RpcApi trait implements all the logic for the RPC API

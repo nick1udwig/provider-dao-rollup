@@ -1,3 +1,5 @@
 **/node_modules
 **/target
 **/dist
+*.swp
+elf_program/elf/riscv32im-succinct-zkvm-elf

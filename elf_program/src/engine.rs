@@ -14,14 +14,14 @@ const DEFAULT_PAYMENT_PERIOD_HOURS: u8 = 24;
 /// Current on-chain state of DAO
 #[derive(Serialize, Deserialize)]
 pub struct DaoState {
-    root_node: String,
-    members: HashMap<String, AlloyAddress>,
-    proposals: HashMap<u64, ProposalInProgress>,
-    // client_blacklist: Vec<String>,
-    // member_blacklist: Vec<String>,
-    queue_response_timeout_seconds: u8,
-    max_outstanding_payments: u8,
-    payment_period_hours: u8,
+    pub routers: Vec<String>,  // length 1 for now
+    pub members: HashMap<String, AlloyAddress>,
+    pub proposals: HashMap<u64, ProposalInProgress>,
+    // pub client_blacklist: Vec<String>,
+    // pub member_blacklist: Vec<String>,
+    pub queue_response_timeout_seconds: u8,
+    pub max_outstanding_payments: u8,
+    pub payment_period_hours: u8,
 }
 
 /// Possible changes to on-chain DAO state:
@@ -31,7 +31,7 @@ pub struct DaoState {
 pub enum DaoTransaction {
     Propose(Proposal),
     Vote { item: u64, vote: SignedVote },
-    // Join: TODO
+    Join(AlloyAddress),
     // Payment: TODO
     // * from clients to treasury for work done
     // * to providers from treasury for work done
@@ -51,21 +51,21 @@ pub enum Proposal {
 
 /// Possible proposals
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct ProposalInProgress {
-    proposal: Proposal,
-    votes: HashMap<String, SignedVote>,
+pub struct ProposalInProgress {
+    pub proposal: Proposal,
+    pub votes: HashMap<String, SignedVote>,
 }
 
 /// A vote on a proposal
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct Vote {
-    proposal_hash: u64,
-    is_yea: bool,
+pub struct Vote {
+    pub proposal_hash: u64,
+    pub is_yea: bool,
 }
 
 /// A signed vote on a proposal
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct SignedVote {
+pub struct SignedVote {
     vote: Vote,
     signature: u64,
 }
@@ -75,23 +75,23 @@ pub type FullRollupState = BaseRollupState<DaoState, DaoTransaction>;
 impl Hash for Proposal {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            ChangeRootNode(node) => {
+            Proposal::ChangeRootNode(node) => {
                 0.hash(state);
                 node.hash(state);
             }
-            ChangeQueueResponseTimeoutSeconds(timeout) => {
+            Proposal::ChangeQueueResponseTimeoutSeconds(timeout) => {
                 1.hash(state);
                 timeout.hash(state);
             }
-            ChangeMaxOutstandingPayments(max) => {
+            Proposal::ChangeMaxOutstandingPayments(max) => {
                 2.hash(state);
                 max.hash(state);
             }
-            ChangePaymentPeriodHours(period) => {
+            Proposal::ChangePaymentPeriodHours(period) => {
                 3.hash(state);
                 period.hash(state);
             }
-            Kick(node) => {
+            Proposal::Kick(node) => {
                 4.hash(state);
                 node.hash(state);
             }
@@ -109,7 +109,7 @@ impl Default for FullRollupState {
             batches: vec![],
             l1_block: U256::ZERO,
             state: DaoState {
-                root_node: String::new(),
+                routers: vec![],
                 members: HashMap::new(),
                 proposals: HashMap::new(),
                 queue_response_timeout_seconds: DEFAULT_QUEUE_RESPONSE_TIMEOUT_SECONDS,
@@ -124,7 +124,11 @@ impl Default for FullRollupState {
 /// The `execute` function is called by the sequencer to process a single transaction.
 impl ExecutionEngine<DaoTransaction> for FullRollupState {
     // process a single transaction
-    fn execute(&mut self, stx: SignedTransaction<DaoTransaction>) -> anyhow::Result<()> {
+    fn execute(
+        &mut self,
+        stx: SignedTransaction<DaoTransaction>,
+        node: Option<String>,
+    ) -> anyhow::Result<()> {
         let decode_stx = stx.clone();
 
         // DO NOT verify a signature for a bridge transaction
@@ -168,7 +172,6 @@ impl ExecutionEngine<DaoTransaction> for FullRollupState {
                     self.balances.get(&stx.pub_key).unwrap_or(&U256::ZERO) - amount,
                 );
                 self.withdrawals.push((stx.pub_key, amount));
-                self.sequenced.push(stx);
                 Ok(())
             }
             TransactionData::Transfer { from, to, amount } => {
@@ -184,7 +187,6 @@ impl ExecutionEngine<DaoTransaction> for FullRollupState {
                     to.clone(),
                     self.balances.get(&to).unwrap_or(&U256::ZERO) + amount,
                 );
-                self.sequenced.push(stx);
                 Ok(())
             }
             // TransactionData::Extension includes the business logic for the rollup
@@ -195,25 +197,29 @@ impl ExecutionEngine<DaoTransaction> for FullRollupState {
                         proposal.hash(&mut hasher);
                         let hash = hasher.finish();
                         if self.state.proposals.contains_key(&hash) {
-                            Err(anyhow::anyhow!("proposal already exists"))
+                            return Err(anyhow::anyhow!("proposal already exists"));
                         }
-                        proposals.insert(hash, ProposalInProgress {
+                        self.state.proposals.insert(hash, ProposalInProgress {
                             proposal,
                             votes: HashMap::new()
                         });
                     }
                     DaoTransaction::Vote { item, vote } => {
-                        unimplemented!("TODO: take the source node id and use that as votes map key");
-                        //if !self.state.proposals.contains_key(&item) {
-                        //    Err(anyhow::anyhow!("proposal does not exist"))
-                        //}
-                        //self.state.proposals.entry(&item)
-                        //    .and_modify(|votes| {
-                        //    });
+                        let node = node.ok_or_else(|| anyhow::anyhow!("only a Kinode may vote"))?;
+                        if !self.state.proposals.contains_key(&item) {
+                            return Err(anyhow::anyhow!("proposal does not exist"));
+                        }
+                        // TODO: confirm AlloyAddress sig
+                        self.state.proposals.entry(item)
+                            .and_modify(|proposal| {
+                                proposal.votes.insert(node, vote);
+                            });
+                    }
+                    DaoTransaction::Join(chain_address) => {
+                        let node = node.ok_or_else(|| anyhow::anyhow!("can only add a Kinode"))?;
+                        self.state.members.insert(node, chain_address);
                     }
                 }
-
-                self.sequenced.push(stx);
                 Ok(())
             }
         }
@@ -236,66 +242,6 @@ impl ExecutionEngine<DaoTransaction> for FullRollupState {
         match get_typed_state(|bytes| Ok(serde_json::from_slice::<FullRollupState>(bytes)?)) {
             Some(rs) => rs,
             None => FullRollupState::default(),
-        }
-    }
-
-    // TODO:
-    //  in-Kinode messaging
-    //  * queries of state (e.g., for fetching root node)
-    //  * writes to state (e.g., for proposing/voting)
-
-    // logic for handling incoming http requests
-    fn rpc(&mut self, req: &http::IncomingHttpRequest) -> anyhow::Result<()> {
-        match req.method()?.as_str() {
-            // chain reads
-            "GET" => {
-                // For simplicity, we just return the entire state as the only chain READ operation
-                http::send_response(
-                    http::StatusCode::OK,
-                    Some(HashMap::from([(
-                        String::from("Content-Type"),
-                        String::from("application/json"),
-                    )])),
-                    serde_json::to_vec(&self)?,
-                );
-                Ok(())
-            }
-            // chain writes (handle transactions)
-            "POST" => {
-                // get the blob from the request
-                let Some(blob) = get_blob() else {
-                    return Ok(http::send_response(
-                        http::StatusCode::BAD_REQUEST,
-                        None,
-                        vec![],
-                    ));
-                };
-                // deserialize the blob into a SignedTransaction
-                let tx =
-                    serde_json::from_slice::<SignedTransaction<DaoTransaction>>(&blob.bytes)?;
-
-                // execute the transaction, which will propagate any errors like a bad signature or bad move
-                self.execute(tx)?;
-                self.save()?;
-                // send a confirmation to the frontend that the transaction was sequenced
-                http::send_response(
-                    http::StatusCode::OK,
-                    None,
-                    "send tx receipt or error here" // TODO better receipt
-                        .to_string()
-                        .as_bytes()
-                        .to_vec(),
-                );
-
-                Ok(())
-            }
-            // Any other http method will be rejected
-            // feel free to add more methods if you need them
-            _ => Ok(http::send_response(
-                http::StatusCode::METHOD_NOT_ALLOWED,
-                None,
-                vec![],
-            )),
         }
     }
 }

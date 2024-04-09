@@ -1,10 +1,12 @@
 #![feature(let_chains)]
+use std::collections::HashMap;
+
 use kinode_process_lib::eth;
 use kinode_process_lib::kernel_types::MessageType;
 use kinode_process_lib::{
     await_message, call_init, get_blob, http, println,
     vfs::{create_drive, create_file},
-    Address, Message, Request,
+    Address, Message, Request, Response,
 };
 use serde::{Deserialize, Serialize};
 use sp1_core::SP1Stdin;
@@ -12,7 +14,7 @@ use sp1_core::SP1Stdin;
 mod bridge_lib;
 use bridge_lib::{get_old_logs, handle_log, subscribe_to_logs};
 mod engine;
-use engine::FullRollupState;
+use engine::{DaoTransaction, FullRollupState};
 mod prover_types;
 use prover_types::ProveRequest;
 mod rollup_lib;
@@ -24,6 +26,38 @@ const ELF: &[u8] = include_bytes!("../../../elf_program/elf/riscv32im-succinct-z
 enum AdminActions {
     Prove,
     BatchWithdrawals,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum SequencerRequest {
+    Read(ReadRequest),
+    Write(SignedTransaction<DaoTransaction>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum SequencerResponse {
+    Read(ReadResponse),
+    Write,  // TODO: return hash of tx?
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum ReadRequest {
+    All,
+    Dao,
+    Routers,
+    Members,
+    Proposals,
+    Parameters,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum ReadResponse {
+    All,
+    Dao,
+    Routers(Vec<String>),  // length 1 for now
+    Members,
+    Proposals,
+    Parameters,
 }
 
 // Boilerplate: generate the wasm bindings for a process
@@ -61,7 +95,7 @@ fn initialize(our: Address) {
 
     // index all old deposits
     get_old_logs(&eth_provider, &mut state);
-    state.save();
+    state.save().unwrap();
     // subscribe to new deposits
     subscribe_to_logs(&eth_provider, state.l1_block);
 
@@ -99,10 +133,54 @@ fn handle_message(
         return Ok(());
     }
     if message.source().node != our.node {
-        // got cross rollup message, implementation is TODO. Need to:
-        // - first verify that this message was posted to DA
-        // - then sequence it
-        return Ok(());
+        // // got cross rollup message, implementation is TODO. Need to:
+        // // - first verify that this message was posted to DA
+        // // - then sequence it
+        // return Ok(());
+        let Some(blob) = get_blob() else {
+            return Err(anyhow::anyhow!(
+                "got Request without blob: expected Read or Write() in blob"
+            ));
+        };
+        match serde_json::from_slice::<SequencerRequest>(&blob.bytes)? {
+            SequencerRequest::Read(read_type) => {
+                match read_type {
+                    ReadRequest::Routers => {
+                        Response::new()
+                            .blob_bytes(serde_json::to_vec(&ReadResponse::Routers(
+                                state.state.routers.clone()
+                            ))?)
+                            .send()?;
+                    }
+                    _ => unimplemented!("only Routers is currently implemented"),  // TODO
+                }
+            }
+            SequencerRequest::Write(tx) => {
+                // get the blob from the request
+                let Some(blob) = get_blob() else {
+                    return Ok(http::send_response(
+                        http::StatusCode::BAD_REQUEST,
+                        None,
+                        vec![],
+                    ));
+                };
+                // deserialize the blob into a SignedTransaction
+                let tx =
+                    serde_json::from_slice::<SignedTransaction<DaoTransaction>>(&blob.bytes)?;
+
+                // execute the transaction, which will propagate any errors like a bad signature or bad move
+                let node = Some(message.source().node.clone());
+                state.execute(tx.clone(), node.clone())?;
+                // save the tx for proving
+                state.sequenced.push((tx, node));
+                state.save()?;
+                // send a confirmation to the requestor that the transaction was sequenced
+                Response::new()
+                    .blob_bytes(vec![])
+                    .send()?;
+            }
+        }
+        return Ok(())
     }
     return match message.source().process.to_string().as_str() {
         "http_server:distro:sys" => {
@@ -137,7 +215,63 @@ fn handle_http_request(
         // GETs and POSTs are reads and writes to the chain, respectively
         // essentially, this is our RPC API
         http::HttpServerRequest::Http(ref incoming) => {
-            state.rpc(incoming)?;
+            match incoming.method()?.as_str() {
+                // TODO:
+                //  in-Kinode messaging
+                //  * queries of state (e.g., for fetching root node)
+                //  * writes to state (e.g., for proposing/voting)
+                // chain reads
+                "GET" => {
+                    // TODO: different paths
+                    http::send_response(
+                        http::StatusCode::OK,
+                        Some(HashMap::from([(
+                            String::from("Content-Type"),
+                            String::from("application/json"),
+                        )])),
+                        serde_json::to_vec(&ReadResponse::Routers(state.state.routers.clone()))?,
+                    );
+                }
+                // chain writes (handle transactions)
+                "POST" => {
+                    // get the blob from the request
+                    let Some(blob) = get_blob() else {
+                        return Ok(http::send_response(
+                            http::StatusCode::BAD_REQUEST,
+                            None,
+                            vec![],
+                        ));
+                    };
+                    // deserialize the blob into a SignedTransaction
+                    let tx =
+                        serde_json::from_slice::<SignedTransaction<DaoTransaction>>(&blob.bytes)?;
+
+                    // execute the transaction, which will propagate any errors like a bad signature or bad move
+                    let node = None;
+                    state.execute(tx.clone(), node.clone())?;
+                    // save the tx for proving
+                    state.sequenced.push((tx, node));
+                    state.save()?;
+                    // send a confirmation to the frontend that the transaction was sequenced
+                    http::send_response(
+                        http::StatusCode::OK,
+                        None,
+                        "send tx receipt or error here" // TODO better receipt
+                            .to_string()
+                            .as_bytes()
+                            .to_vec(),
+                    );
+                }
+                // Any other http method will be rejected
+                // feel free to add more methods if you need them
+                _ => {
+                    http::send_response(
+                        http::StatusCode::METHOD_NOT_ALLOWED,
+                        None,
+                        vec![],
+                    );
+                }
+            }
             Ok(())
         }
         // this is for connecting to the prover_extension
@@ -219,6 +353,10 @@ fn handle_admin_message(
                 })?)
                 .send()
                 .unwrap();
+
+            // TODO: is this correct?
+            state.sequenced = vec![];
+
             // NOTE the response comes in as a WebSocketPush message, see above
             Ok(())
         }

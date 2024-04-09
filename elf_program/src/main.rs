@@ -10,11 +10,11 @@ pub fn main() {
     // read in the old state
     let mut state = sp1_zkvm::io::read::<FullRollupState>();
     // read in the next batch of transactions
-    let mem_pool = sp1_zkvm::io::read::<Vec<SignedTransaction<ChessTransactions>>>();
+    let mem_pool = sp1_zkvm::io::read::<Vec<(SignedTransaction<DaoTransaction>, Option<String>)>>();
 
     // execute each transaction
-    for tx in mem_pool.iter() {
-        state.execute(tx.clone()).unwrap();
+    for (tx, node) in mem_pool.into_iter() {
+        state.execute(tx, node).unwrap();
     }
 
     // write the new state

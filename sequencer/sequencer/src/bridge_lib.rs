@@ -84,17 +84,20 @@ where
             let sender = deposit.0;
             let amount = deposit.1;
 
-            state.execute(SignedTransaction {
-                pub_key: sender,
-                sig: Signature::test_signature(), // NOTE: deposit txs are unsigned (TODO should be a null sig)
-                tx: Transaction {
-                    nonce: U256::ZERO, // NOTE: this doesn't need to be a "real" nonce since deposits are ex-nihilo
-                    data: TransactionData::BridgeTokens {
-                        amount,
-                        block: log.block_number.unwrap(),
+            state.execute(
+                SignedTransaction {
+                    pub_key: sender,
+                    sig: Signature::test_signature(), // NOTE: deposit txs are unsigned (TODO should be a null sig)
+                    tx: Transaction {
+                        nonce: U256::ZERO, // NOTE: this doesn't need to be a "real" nonce since deposits are ex-nihilo
+                        data: TransactionData::BridgeTokens {
+                            amount,
+                            block: log.block_number.unwrap(),
+                        },
                     },
                 },
-            })?;
+                None,
+            )?;
         }
         BatchPosted::SIGNATURE_HASH => {
             let batch = BatchPosted::abi_decode_data(&log.data, true).unwrap();
