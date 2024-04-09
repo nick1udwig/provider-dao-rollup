@@ -16,7 +16,8 @@ interface ExampleConfig {
 
 // Example Configuration
 export const CurrentConfig: ExampleConfig = {
-    chain: Chain.MAINNET,
+    chain: Chain.SEPOLIA,
+    //chain: Chain.MAINNET,
     rpc: {
         sepolia: 'https://sepolia.infura.io/v3/',
         mainnet: 'https://mainnet.infura.io/v3/',

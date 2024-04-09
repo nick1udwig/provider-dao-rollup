@@ -17,7 +17,7 @@ sol! {
 /// - a map of nonces (for replay protection)
 /// - a list of pending withdrawals (not yet included in a batch)
 /// - a list of batches (new states that users can withdraw against on L1)
-/// - additional state S, which can be anything. In this repo, we use it for storing chess game state
+/// - additional state S, which can be anything
 #[derive(Serialize, Deserialize)]
 pub struct BaseRollupState<S, T> {
     pub sequenced: Vec<(SignedTransaction<T>, Option<String>)>,  // TODO: move to another struct? We will have to prove this
@@ -51,7 +51,6 @@ pub struct Transaction<T> {
 /// - withdrawing tokens from L2 to L1
 /// - transferring the gas token between accounts
 /// Any remaining "special" transactions can be handled by the extension field.
-/// For instance, in this repo we use it for starting chess games, moving pieces, etc.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum TransactionData<T> {
     BridgeTokens {

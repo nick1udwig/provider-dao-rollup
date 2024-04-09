@@ -20,7 +20,7 @@ kit bs
 cd ../prover_extension
 cargo run --release -- --port 8080
 ```
-You can then go to `http://localhost:8080/sequencer:rollup:goldfinger.os` to see the UI and play around with sending transactions to your sequencer (make sure you have metamask installed in your browser!)
+You can then go to `http://localhost:8080/sequencer:provider-dao-rollup:nick1udwig.os` to see the UI and play around with sending transactions to your sequencer (make sure you have metamask installed in your browser!)
 
 ## Guide to Modifying the Rollup
 This chess example was written in a way to make it very easy to modify.

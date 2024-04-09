@@ -25,7 +25,7 @@ struct Args {
 }
 
 const LOCALHOST: &str = "ws://localhost";
-const PROCESS_ID: &str = "sequencer:rollup:goldfinger.os";
+const PROCESS_ID: &str = "sequencer:provider-dao-rollup:nick1udwig.os";
 const EVENT_LOOP_CHANNEL_CAPACITY: usize = 100;
 
 #[tokio::main]

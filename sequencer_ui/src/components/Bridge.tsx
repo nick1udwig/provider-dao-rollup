@@ -18,7 +18,7 @@ const Bridge = () => {
                     return;
                 }
                 if (!BRIDGE_ADDRESS[chainId]) {
-                    window.alert('Please connect to Optimism mainnet');
+                    window.alert('Please connect to Sepolia testnet');
                     return;
                 }
 
@@ -36,7 +36,7 @@ const Bridge = () => {
 
     return (
         <div>
-            <h4 className="m-2">Bridge ETH (value in WEI) from Optimism</h4>
+            <h4 className="m-2">Bridge ETH (value in WEI) from Sepolia</h4>
             <div className="flex flex-col overflow-auto">
                 <form onSubmit={bridge} className="flex place-items-center self-stretch">
                     <input

@@ -10,6 +10,7 @@ use kinode_process_lib::{
 };
 use serde::{Deserialize, Serialize};
 use sp1_core::SP1Stdin;
+use alloy_primitives::{Address as AlloyAddress};
 
 mod bridge_lib;
 use bridge_lib::{get_old_logs, handle_log, subscribe_to_logs};
@@ -23,9 +24,11 @@ use rollup_lib::*;
 const ELF: &[u8] = include_bytes!("../../../elf_program/elf/riscv32im-succinct-zkvm-elf");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum AdminActions {
+enum AdminAction {
     Prove,
     BatchWithdrawals,
+    SetRouters(Vec<String>),
+    SetMembers(Vec<String>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,7 +58,7 @@ enum ReadResponse {
     All,
     Dao,
     Routers(Vec<String>),  // length 1 for now
-    Members,
+    Members(Vec<String>),  // TODO: should probably be the HashMap
     Proposals,
     Parameters,
 }
@@ -75,7 +78,7 @@ call_init!(initialize);
 
 fn initialize(our: Address) {
     // A little printout to show in terminal that the process has started.
-    println!("{}: started", our.package());
+    println!("{}: started", our);
 
     // Serve the index.html and other UI files found in pkg/ui at the root path.
     // authenticated=true, local_only=false
@@ -115,7 +118,7 @@ fn main_loop(our: &Address, state: &mut FullRollupState, connection: &mut Option
             }
             Ok(message) => match handle_message(&our, &message, state, connection) {
                 Ok(()) => continue,
-                Err(e) => println!("{our}: error handling request: {:?}", e),
+                Err(e) => println!("{}: error handling request: {:?}", our.process(), e),
             },
         }
     }
@@ -133,54 +136,7 @@ fn handle_message(
         return Ok(());
     }
     if message.source().node != our.node {
-        // // got cross rollup message, implementation is TODO. Need to:
-        // // - first verify that this message was posted to DA
-        // // - then sequence it
-        // return Ok(());
-        let Some(blob) = get_blob() else {
-            return Err(anyhow::anyhow!(
-                "got Request without blob: expected Read or Write() in blob"
-            ));
-        };
-        match serde_json::from_slice::<SequencerRequest>(&blob.bytes)? {
-            SequencerRequest::Read(read_type) => {
-                match read_type {
-                    ReadRequest::Routers => {
-                        Response::new()
-                            .blob_bytes(serde_json::to_vec(&ReadResponse::Routers(
-                                state.state.routers.clone()
-                            ))?)
-                            .send()?;
-                    }
-                    _ => unimplemented!("only Routers is currently implemented"),  // TODO
-                }
-            }
-            SequencerRequest::Write(tx) => {
-                // get the blob from the request
-                let Some(blob) = get_blob() else {
-                    return Ok(http::send_response(
-                        http::StatusCode::BAD_REQUEST,
-                        None,
-                        vec![],
-                    ));
-                };
-                // deserialize the blob into a SignedTransaction
-                let tx =
-                    serde_json::from_slice::<SignedTransaction<DaoTransaction>>(&blob.bytes)?;
-
-                // execute the transaction, which will propagate any errors like a bad signature or bad move
-                let node = Some(message.source().node.clone());
-                state.execute(tx.clone(), node.clone())?;
-                // save the tx for proving
-                state.sequenced.push((tx, node));
-                state.save()?;
-                // send a confirmation to the requestor that the transaction was sequenced
-                Response::new()
-                    .blob_bytes(vec![])
-                    .send()?;
-            }
-        }
-        return Ok(())
+        return handle_sequencer_request(our, message, state);
     }
     return match message.source().process.to_string().as_str() {
         "http_server:distro:sys" => {
@@ -200,7 +156,12 @@ fn handle_message(
             // which implements the default, audited way to interact with deposits
             handle_log(state, &log)
         }
-        _ => handle_admin_message(&our, message, state, connection),
+        _ => {
+            if handle_sequencer_request(our, message, state).is_ok() {
+                return Ok(());
+            }
+            handle_admin_message(our, message, state, connection)
+        }
     };
 }
 
@@ -321,6 +282,66 @@ fn handle_http_request(
     }
 }
 
+fn handle_sequencer_request(
+    our: &Address,
+    message: &Message,
+    state: &mut FullRollupState,
+) -> anyhow::Result<()> {
+    let Some(blob) = get_blob() else {
+        return Err(anyhow::anyhow!(
+            "got Request without blob: expected Read or Write() in blob"
+        ));
+    };
+    match serde_json::from_slice::<SequencerRequest>(&blob.bytes)? {
+        SequencerRequest::Read(read_type) => {
+            match read_type {
+                ReadRequest::Routers => {
+                    Response::new()
+                        .body(vec![])
+                        .blob_bytes(serde_json::to_vec(&ReadResponse::Routers(
+                            state.state.routers.clone()
+                        ))?)
+                        .send()?;
+                }
+                ReadRequest::Members => {
+                    Response::new()
+                        .body(vec![])
+                        .blob_bytes(serde_json::to_vec(&ReadResponse::Members(
+                            state.state.members.keys().cloned().collect()
+                        ))?)
+                        .send()?;
+                }
+                _ => unimplemented!("only Routers, Members are currently implemented"),  // TODO
+            }
+        }
+        SequencerRequest::Write(tx) => {
+            // get the blob from the request
+            let Some(blob) = get_blob() else {
+                return Ok(http::send_response(
+                    http::StatusCode::BAD_REQUEST,
+                    None,
+                    vec![],
+                ));
+            };
+            // deserialize the blob into a SignedTransaction
+            let tx =
+                serde_json::from_slice::<SignedTransaction<DaoTransaction>>(&blob.bytes)?;
+
+            // execute the transaction, which will propagate any errors like a bad signature or bad move
+            let node = Some(message.source().node.clone());
+            state.execute(tx.clone(), node.clone())?;
+            // save the tx for proving
+            state.sequenced.push((tx, node));
+            state.save()?;
+            // send a confirmation to the requestor that the transaction was sequenced
+            Response::new()
+                .blob_bytes(vec![])
+                .send()?;
+        }
+    }
+    Ok(())
+}
+
 // the only admin action we have is to prove the current state, more to come in the future
 fn handle_admin_message(
     our: &Address,
@@ -328,8 +349,8 @@ fn handle_admin_message(
     state: &mut FullRollupState,
     connection: &mut Option<u32>,
 ) -> anyhow::Result<()> {
-    match serde_json::from_slice::<AdminActions>(message.body())? {
-        AdminActions::Prove => {
+    match serde_json::from_slice::<AdminAction>(message.body())? {
+        AdminAction::Prove => {
             let Some(channel_id) = connection else {
                 return Err(anyhow::anyhow!("no connection"));
             };
@@ -356,11 +377,11 @@ fn handle_admin_message(
 
             // TODO: is this correct?
             state.sequenced = vec![];
+            state.save()?;
 
             // NOTE the response comes in as a WebSocketPush message, see above
-            Ok(())
         }
-        AdminActions::BatchWithdrawals => {
+        AdminAction::BatchWithdrawals => {
             let batch = WithdrawTree::new(state.withdrawals.clone());
             state.batches.push(batch);
 
@@ -373,8 +394,22 @@ fn handle_admin_message(
             withdrawal_file.write(&serde_json::to_vec(state.batches.last().unwrap()).unwrap())?;
 
             state.withdrawals = vec![];
-
-            Ok(())
+            state.save()?;
+        }
+        // TODO: remove these hacks:
+        // (they are just here to avoid having to write all the FE logic to get the txs working properly)
+        AdminAction::SetRouters(routers) => {
+            state.state.routers = routers;
+            state.save()?;
+        }
+        AdminAction::SetMembers(member_names) => {
+            let mut members = HashMap::new();
+            for member in member_names {
+                members.insert(member, AlloyAddress::new([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]));
+            }
+            state.state.members = members;
+            state.save()?;
         }
     }
+    Ok(())
 }

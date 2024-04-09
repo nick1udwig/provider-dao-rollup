@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["sequencer"]
+members = [
+    "sequencer",
+    "admin",
+    "read",
+]
 
 [profile.release]
 panic = "abort"

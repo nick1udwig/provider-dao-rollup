@@ -1,0 +1,24 @@
+{
+    "admin.wasm": {
+        "root": false,
+        "public": false,
+        "request_networking": false,
+        "request_capabilities": [
+            "sequencer:provider-dao-rollup:nick1udwig.os"
+        ],
+        "grant_capabilities": [
+            "sequencer:provider-dao-rollup:nick1udwig.os"
+        ]
+    },
+    "read.wasm": {
+        "root": false,
+        "public": false,
+        "request_networking": false,
+        "request_capabilities": [
+            "sequencer:provider-dao-rollup:nick1udwig.os"
+        ],
+        "grant_capabilities": [
+            "sequencer:provider-dao-rollup:nick1udwig.os"
+        ]
+    }
+}

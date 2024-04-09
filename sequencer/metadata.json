@@ -1,11 +1,11 @@
 {
-    "name": "Rollup",
+    "name": "Provider DAO Rollup",
     "description": "",
     "image": "",
     "properties": {
-        "package_name": "rollup",
+        "package_name": "provider-dao-rollup",
         "current_version": "0.1.0",
-        "publisher": "goldfinger.os",
+        "publisher": "nick1udwig.os",
         "mirrors": [],
         "code_hashes": {
             "0.1.0": ""

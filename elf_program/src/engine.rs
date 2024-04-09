@@ -1,6 +1,5 @@
 use crate::rollup_lib::{BaseRollupState, ExecutionEngine, SignedTransaction, TransactionData};
 use alloy_primitives::{Address as AlloyAddress, U256};
-use chess::{Board, BoardStatus, ChessMove};
 use kinode_process_lib::{get_blob, get_typed_state, http, set_state};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, hash_map::DefaultHasher};
@@ -120,7 +119,7 @@ impl Default for FullRollupState {
     }
 }
 
-/// This is where all of the business logic for the chess rollup lives.
+/// This is where all of the business logic for the rollup lives.
 /// The `execute` function is called by the sequencer to process a single transaction.
 impl ExecutionEngine<DaoTransaction> for FullRollupState {
     // process a single transaction
