@@ -55,7 +55,7 @@ enum ReadRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum ReadResponse {
-    All,
+    All(engine::DaoState),
     Dao,
     Routers(Vec<String>),  // length 1 for now
     Members(Vec<String>),  // TODO: should probably be the HashMap
@@ -295,23 +295,31 @@ fn handle_sequencer_request(
     match serde_json::from_slice::<SequencerRequest>(&blob.bytes)? {
         SequencerRequest::Read(read_type) => {
             match read_type {
+                ReadRequest::All => {
+                    Response::new()
+                        .body(vec![])
+                        .blob_bytes(serde_json::to_vec(&SequencerResponse::Read(ReadResponse::All(
+                            state.state.clone()
+                        )))?)
+                        .send()?;
+                }
                 ReadRequest::Routers => {
                     Response::new()
                         .body(vec![])
-                        .blob_bytes(serde_json::to_vec(&ReadResponse::Routers(
+                        .blob_bytes(serde_json::to_vec(&SequencerResponse::Read(ReadResponse::Routers(
                             state.state.routers.clone()
-                        ))?)
+                        )))?)
                         .send()?;
                 }
                 ReadRequest::Members => {
                     Response::new()
                         .body(vec![])
-                        .blob_bytes(serde_json::to_vec(&ReadResponse::Members(
+                        .blob_bytes(serde_json::to_vec(&SequencerResponse::Read(ReadResponse::Members(
                             state.state.members.keys().cloned().collect()
-                        ))?)
+                        )))?)
                         .send()?;
                 }
-                _ => unimplemented!("only Routers, Members are currently implemented"),  // TODO
+                _ => unimplemented!("only All, Routers, Members are currently implemented"),  // TODO
             }
         }
         SequencerRequest::Write(tx) => {

@@ -6,12 +6,13 @@ use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
-const DEFAULT_QUEUE_RESPONSE_TIMEOUT_SECONDS: u8 = 5;
+const DEFAULT_QUEUE_RESPONSE_TIMEOUT_SECONDS: u8 = 1;
+const DEFAULT_SERVE_TIMEOUT_SECONDS: u16 = 60;
 const DEFAULT_MAX_OUTSTANDING_PAYMENTS: u8 = 3;
 const DEFAULT_PAYMENT_PERIOD_HOURS: u8 = 24;
 
 /// Current on-chain state of DAO
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DaoState {
     pub routers: Vec<String>,  // length 1 for now
     pub members: HashMap<String, AlloyAddress>,
@@ -19,6 +20,7 @@ pub struct DaoState {
     // pub client_blacklist: Vec<String>,
     // pub member_blacklist: Vec<String>,
     pub queue_response_timeout_seconds: u8,
+    pub serve_timeout_seconds: u16, // TODO
     pub max_outstanding_payments: u8,
     pub payment_period_hours: u8,
 }
@@ -112,6 +114,7 @@ impl Default for FullRollupState {
                 members: HashMap::new(),
                 proposals: HashMap::new(),
                 queue_response_timeout_seconds: DEFAULT_QUEUE_RESPONSE_TIMEOUT_SECONDS,
+                serve_timeout_seconds: DEFAULT_SERVE_TIMEOUT_SECONDS,
                 max_outstanding_payments: DEFAULT_MAX_OUTSTANDING_PAYMENTS,
                 payment_period_hours: DEFAULT_PAYMENT_PERIOD_HOURS,
             },

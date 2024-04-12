@@ -18,7 +18,7 @@ sol! {
 /// - a list of pending withdrawals (not yet included in a batch)
 /// - a list of batches (new states that users can withdraw against on L1)
 /// - additional state S, which can be anything
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BaseRollupState<S, T> {
     pub sequenced: Vec<(SignedTransaction<T>, Option<String>)>,  // TODO: move to another struct? We will have to prove this
     pub balances: HashMap<AlloyAddress, U256>,

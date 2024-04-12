@@ -20,7 +20,7 @@ wit_bindgen::generate!({
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum SequencerRequest {
     Read(ReadRequest),
-    Write(SignedTransaction<DaoTransaction>),
+    Write(SignedTransaction<engine::DaoState>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,7 +41,7 @@ enum ReadRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum ReadResponse {
-    All,
+    All(engine::DaoState),
     Dao,
     Routers(Vec<String>),  // length 1 for now
     Members(Vec<String>),  // TODO: should probably be the HashMap
@@ -90,8 +90,8 @@ fn init(our: Address) {
         return;
     };
 
-    match serde_json::from_slice::<ReadResponse>(&bytes) {
-        Ok(response) => println!("ReadResponse: {response:?}"),
+    match serde_json::from_slice::<SequencerResponse>(&bytes) {
+        Ok(response) => println!("SequencerResponse: {response:?}"),
         Err(err) => println!("did not receive Response of type ReadResponse from {PROCESS_NAME}:{package_name}:{PUBLISHER}; error: {err:?}"),
     }
 }
