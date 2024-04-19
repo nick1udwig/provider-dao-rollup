@@ -12,9 +12,6 @@ use rollup_lib::SignedTransaction;
 wit_bindgen::generate!({
     path: "wit",
     world: "process",
-    exports: {
-        world: Component,
-    },
 });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

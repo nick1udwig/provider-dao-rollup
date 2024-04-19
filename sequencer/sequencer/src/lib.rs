@@ -67,9 +67,6 @@ enum ReadResponse {
 wit_bindgen::generate!({
     path: "wit",
     world: "process",
-    exports: {
-        world: Component,
-    },
 });
 
 // After generating bindings, use this macro to define the Component struct
